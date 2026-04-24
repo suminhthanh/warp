@@ -179,6 +179,21 @@ impl fmt::Display for Harness {
     }
 }
 
+impl Harness {
+    /// Parses a harness config-name string (the lowercase name written into
+    /// `HarnessConfig::harness_type` by the spawner, e.g. "claude", "gemini", "oz") into a
+    /// [`Harness`] variant. Unknown values fall back to [`Harness::Oz`] so clients never get
+    /// stuck in a mismatched non-oz state when the server surfaces an unexpected harness name.
+    pub fn from_config_name(name: &str) -> Self {
+        match name {
+            "claude" => Harness::Claude,
+            "gemini" => Harness::Gemini,
+            "oz" => Harness::Oz,
+            _ => Harness::Oz,
+        }
+    }
+}
+
 /// Profile subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgentProfileCommand {

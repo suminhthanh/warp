@@ -10,6 +10,7 @@ use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalViewState;
 use crate::terminal::CLIAgent;
+use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::icon_with_status::{
     render_icon_with_status, IconWithStatusSizing, IconWithStatusVariant,
 };
@@ -111,6 +112,16 @@ pub(super) const VERTICAL_TABS_DETAIL_SIDECAR_POSITION_ID: &str = "vertical_tabs
 const VERTICAL_TABS_STATUS_BADGE_ICON_SIZE: f32 = 9.;
 const VERTICAL_TABS_STATUS_BADGE_PADDING: f32 = 1.5;
 const VERTICAL_TABS_STATUS_BADGE_OFFSET: (f32, f32) = (2., 2.);
+// Cloud lobe sizing for ambient/cloud-mode agent icons, matching the Figma spec at
+// https://www.figma.com/design/chk9pwt35jTJhf9KnHmZyE/Components?node-id=6535-4010. The
+// 20x20 brand-color circle sits in the top-left of the 24x24 stack; the white cloud's
+// container is pushed past the stack's bottom-right corner so the visible cloud shape
+// (which has transparent aspect-ratio padding inside the square container) ends up
+// extending ~6px past the circle's right edge and ~5px past its bottom edge, matching
+// Figma. Status icon is centered inside the cloud.
+const VERTICAL_TABS_CLOUD_ICON_SIZE: f32 = 20.;
+const VERTICAL_TABS_CLOUD_OFFSET: (f32, f32) = (2., 3.);
+const VERTICAL_TABS_STATUS_IN_CLOUD_ICON_SIZE: f32 = 9.;
 
 const VERTICAL_TABS_SIZING: IconWithStatusSizing = IconWithStatusSizing {
     icon_size: 16.,
@@ -119,6 +130,9 @@ const VERTICAL_TABS_SIZING: IconWithStatusSizing = IconWithStatusSizing {
     badge_padding: VERTICAL_TABS_STATUS_BADGE_PADDING,
     overall_size_override: None,
     badge_offset: VERTICAL_TABS_STATUS_BADGE_OFFSET,
+    cloud_icon_size: VERTICAL_TABS_CLOUD_ICON_SIZE,
+    cloud_offset: VERTICAL_TABS_CLOUD_OFFSET,
+    status_in_cloud_icon_size: VERTICAL_TABS_STATUS_IN_CLOUD_ICON_SIZE,
 };
 
 const VERTICAL_TABS_AGENT_SIZING: IconWithStatusSizing = IconWithStatusSizing {
@@ -128,6 +142,9 @@ const VERTICAL_TABS_AGENT_SIZING: IconWithStatusSizing = IconWithStatusSizing {
     badge_padding: VERTICAL_TABS_STATUS_BADGE_PADDING,
     overall_size_override: Some(24.),
     badge_offset: VERTICAL_TABS_STATUS_BADGE_OFFSET,
+    cloud_icon_size: VERTICAL_TABS_CLOUD_ICON_SIZE,
+    cloud_offset: VERTICAL_TABS_CLOUD_OFFSET,
+    status_in_cloud_icon_size: VERTICAL_TABS_STATUS_IN_CLOUD_ICON_SIZE,
 };
 
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
@@ -749,7 +766,7 @@ enum VerticalTabsResolvedMode {
 enum SummaryPaneKind {
     Terminal,
     OzAgent { is_ambient: bool },
-    CLIAgent { agent: CLIAgent },
+    CLIAgent { agent: CLIAgent, is_ambient: bool },
     Code { title: String },
     CodeDiff,
     File,
@@ -2239,39 +2256,8 @@ fn resolve_icon_with_status_variant(
         TypedPane::Terminal(terminal_pane) => {
             let terminal_view = terminal_pane.terminal_view(app);
             let terminal_view = terminal_view.as_ref(app);
-            let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
-            let is_plugin_backed = cli_agent_session.is_some_and(|s| s.listener.is_some());
-            let is_ambient = terminal_view.is_ambient_agent_session(app);
-            let has_conversation = terminal_view
-                .selected_conversation_display_title(app)
-                .is_some();
-            let is_oz_agent = has_conversation || is_ambient;
-
-            if let Some(session) = cli_agent_session
-                .filter(|s| s.listener.is_some())
-                .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
-            {
-                IconWithStatusVariant::CLIAgent {
-                    agent: session.agent,
-                    status: if agent_supports_rich_status(&session.agent) {
-                        Some(session.status.to_conversation_status())
-                    } else {
-                        None
-                    },
-                }
-            } else if let Some(session) = cli_agent_session
-                .filter(|_| !is_plugin_backed)
-                .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
-            {
-                IconWithStatusVariant::CLIAgent {
-                    agent: session.agent,
-                    status: None,
-                }
-            } else if is_oz_agent {
-                IconWithStatusVariant::OzAgent {
-                    status: terminal_view.selected_conversation_status_for_display(app),
-                    is_ambient,
-                }
+            if let Some(variant) = terminal_view_agent_icon_variant(terminal_view, app) {
+                variant
             } else {
                 // Plain terminal: use foreground color per design spec
                 IconWithStatusVariant::Neutral {
@@ -2470,22 +2456,16 @@ impl TypedPane<'_> {
             TypedPane::Terminal(terminal_pane) => {
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
-                if let Some(session) =
-                    CLIAgentSessionsModel::as_ref(app).session(terminal_view.id())
-                {
-                    return SummaryPaneKind::CLIAgent {
-                        agent: session.agent,
-                    };
-                }
-                let is_ambient = terminal_view.is_ambient_agent_session(app);
-                if terminal_view
-                    .selected_conversation_display_title(app)
-                    .is_some()
-                    || is_ambient
-                {
-                    SummaryPaneKind::OzAgent { is_ambient }
-                } else {
-                    SummaryPaneKind::Terminal
+                // Route through the shared helper so summary mode agrees with
+                // `resolve_icon_with_status_variant` on what the tab represents.
+                match terminal_view_agent_icon_variant(terminal_view, app) {
+                    Some(IconWithStatusVariant::OzAgent { is_ambient, .. }) => {
+                        SummaryPaneKind::OzAgent { is_ambient }
+                    }
+                    Some(IconWithStatusVariant::CLIAgent {
+                        agent, is_ambient, ..
+                    }) => SummaryPaneKind::CLIAgent { agent, is_ambient },
+                    Some(_) | None => SummaryPaneKind::Terminal,
                 }
             }
             TypedPane::Code(_) => SummaryPaneKind::Code {
@@ -3626,19 +3606,30 @@ fn render_summary_pane_kind_icon_circle(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
+    // For ambient Oz / CLI agent kinds, delegate to `render_icon_with_status` so the
+    // brand-color circle is overlaid with the white cloud badge (status-less in summary
+    // mode). Non-ambient agent kinds and all other pane kinds fall through to the inline
+    // circle rendering below.
+    if let Some(variant) = ambient_agent_variant(&kind) {
+        let sizing = IconWithStatusSizing {
+            icon_size,
+            padding,
+            badge_icon_size: VERTICAL_TABS_STATUS_BADGE_ICON_SIZE,
+            badge_padding: VERTICAL_TABS_STATUS_BADGE_PADDING,
+            overall_size_override: Some(icon_size + padding * 2.),
+            badge_offset: VERTICAL_TABS_STATUS_BADGE_OFFSET,
+            cloud_icon_size: VERTICAL_TABS_CLOUD_ICON_SIZE,
+            cloud_offset: VERTICAL_TABS_CLOUD_OFFSET,
+            status_in_cloud_icon_size: VERTICAL_TABS_STATUS_IN_CLOUD_ICON_SIZE,
+        };
+        return render_icon_with_status(variant, &sizing, theme, theme.background());
+    }
     let (icon_element, background): (Box<dyn Element>, ElementFill) = match kind {
-        SummaryPaneKind::OzAgent { is_ambient } => {
-            let icon = if is_ambient {
-                WarpIcon::OzCloud
-            } else {
-                WarpIcon::Oz
-            };
-            (
-                icon.to_warpui_icon(oz_icon_fill(theme)).finish(),
-                theme.background().into(),
-            )
-        }
-        SummaryPaneKind::CLIAgent { agent } => {
+        SummaryPaneKind::OzAgent { .. } => (
+            WarpIcon::Oz.to_warpui_icon(oz_icon_fill(theme)).finish(),
+            theme.background().into(),
+        ),
+        SummaryPaneKind::CLIAgent { agent, .. } => {
             let icon_color = agent.brand_icon_color();
             let icon_element = agent
                 .icon()
@@ -3702,6 +3693,27 @@ fn render_summary_pane_kind_icon_circle(
     .finish()
 }
 
+/// Maps an ambient Oz / CLI agent summary-pane kind to the `IconWithStatusVariant` used to
+/// render the brand-color circle with the white cloud badge. Non-ambient kinds (and all
+/// other pane kinds) return `None` so the caller falls back to its inline rendering.
+fn ambient_agent_variant(kind: &SummaryPaneKind) -> Option<IconWithStatusVariant> {
+    match kind {
+        SummaryPaneKind::OzAgent { is_ambient: true } => Some(IconWithStatusVariant::OzAgent {
+            status: None,
+            is_ambient: true,
+        }),
+        SummaryPaneKind::CLIAgent {
+            agent,
+            is_ambient: true,
+        } => Some(IconWithStatusVariant::CLIAgent {
+            agent: *agent,
+            status: None,
+            is_ambient: true,
+        }),
+        _ => None,
+    }
+}
+
 fn summary_pane_kind_icon(
     kind: SummaryPaneKind,
     appearance: &Appearance,
@@ -3715,15 +3727,8 @@ fn summary_pane_kind_icon(
 
     match kind {
         SummaryPaneKind::Terminal => (WarpIcon::Terminal, main_text),
-        SummaryPaneKind::OzAgent { is_ambient } => (
-            if is_ambient {
-                WarpIcon::OzCloud
-            } else {
-                WarpIcon::Oz
-            },
-            main_text,
-        ),
-        SummaryPaneKind::CLIAgent { agent } => (
+        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Oz, main_text),
+        SummaryPaneKind::CLIAgent { agent, .. } => (
             agent.icon().unwrap_or(WarpIcon::Terminal),
             WarpThemeFill::Solid(agent.brand_icon_color()),
         ),

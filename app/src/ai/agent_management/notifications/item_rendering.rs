@@ -406,6 +406,12 @@ const NOTIFICATION_AVATAR_SIZING: IconWithStatusSizing = IconWithStatusSizing {
     badge_padding: 2.,
     overall_size_override: None,
     badge_offset: (6., 6.),
+    // Notifications never render in cloud/ambient mode today, but every sizing needs to
+    // declare these fields. Defaults mirror the badge sizing so a future switch to the
+    // cloud badge here is visually reasonable without further tuning.
+    cloud_icon_size: 14.,
+    cloud_offset: (6., 6.),
+    status_in_cloud_icon_size: 10.,
 };
 
 fn render_agent_avatar(
@@ -415,13 +421,14 @@ fn render_agent_avatar(
 ) -> Box<dyn Element> {
     let status = notification_category_to_conversation_status(category);
     let variant = match agent {
-        NotificationSourceAgent::Oz => IconWithStatusVariant::OzAgent {
+        NotificationSourceAgent::Oz { is_ambient } => IconWithStatusVariant::OzAgent {
             status: Some(status),
-            is_ambient: false,
+            is_ambient,
         },
-        NotificationSourceAgent::CLI(cli) => IconWithStatusVariant::CLIAgent {
-            agent: cli,
+        NotificationSourceAgent::CLI { agent, is_ambient } => IconWithStatusVariant::CLIAgent {
+            agent,
             status: Some(status),
+            is_ambient,
         },
     };
     render_icon_with_status(
